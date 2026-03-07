@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>lcrh</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      padding: 3rem 1.5rem;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      color: #f0f6fc;
+    }
+
+    .subtitle {
+      color: #7d8590;
+      font-size: 1rem;
+      margin-bottom: 3rem;
+    }
+
+    .projects {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .project {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      overflow: hidden;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+
+    .project:hover {
+      border-color: #58a6ff;
+      transform: translateY(-2px);
+    }
+
+    .project a {
+      text-decoration: none;
+      color: inherit;
+      display: block;
+    }
+
+    .project .screenshot {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #21262d;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .project .screenshot img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .project .screenshot .placeholder {
+      color: #30363d;
+      font-size: 2rem;
+    }
+
+    .project .info {
+      padding: 1rem 1.2rem;
+    }
+
+    .project .info h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #58a6ff;
+      margin-bottom: 0.4rem;
+    }
+
+    .project .info p {
+      font-size: 0.85rem;
+      color: #7d8590;
+      line-height: 1.5;
+    }
+
+    .project .info .tag {
+      display: inline-block;
+      font-size: 0.7rem;
+      color: #7d8590;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 0.15rem 0.5rem;
+      margin-top: 0.6rem;
+    }
+
+    @media (max-width: 480px) {
+      .projects {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>lcrh</h1>
+    <p class="subtitle">Projects &amp; experiments</p>
+
+    <div class="projects">
+
+      <div class="project">
+        <a href="https://lcrh.github.io/turingsoup/">
+          <div class="screenshot">
+            <!-- <img src="screenshots/turingsoup.png" alt="turingsoup"> -->
+            <span class="placeholder">&#9632;</span>
+          </div>
+          <div class="info">
+            <h2>turingsoup</h2>
+            <p>Interactive neural network playground</p>
+            <span class="tag">demo</span>
+          </div>
+        </a>
+      </div>
+
+      <div class="project">
+        <a href="https://lcrh.github.io/maxrl_demo/">
+          <div class="screenshot">
+            <!-- <img src="screenshots/maxrl_demo.png" alt="maxrl_demo"> -->
+            <span class="placeholder">&#9632;</span>
+          </div>
+          <div class="info">
+            <h2>maxrl_demo</h2>
+            <p>Interactive visualization comparing REINFORCE vs Maximum Likelihood RL</p>
+            <span class="tag">demo</span>
+          </div>
+        </a>
+      </div>
+
+      <div class="project">
+        <a href="https://lcrh.github.io/epiplexity/">
+          <div class="screenshot">
+            <!-- <img src="screenshots/epiplexity.png" alt="epiplexity"> -->
+            <span class="placeholder">&#9632;</span>
+          </div>
+          <div class="info">
+            <h2>epiplexity</h2>
+            <p>Experiments with epiplexity estimation</p>
+            <span class="tag">demo</span>
+          </div>
+        </a>
+      </div>
+
+      <div class="project">
+        <a href="https://github.com/lcrh/enact">
+          <div class="screenshot">
+            <!-- <img src="screenshots/enact.png" alt="enact"> -->
+            <span class="placeholder">&#9632;</span>
+          </div>
+          <div class="info">
+            <h2>enact</h2>
+            <p>A framework for generative software</p>
+            <span class="tag">repo</span>
+          </div>
+        </a>
+      </div>
+
+      <div class="project">
+        <a href="https://github.com/lcrh/abstract_satisfaction/blob/main/abstract_satisfaction.pdf">
+          <div class="screenshot">
+            <!-- <img src="screenshots/abstract_satisfaction.png" alt="abstract_satisfaction"> -->
+            <span class="placeholder">&#9632;</span>
+          </div>
+          <div class="info">
+            <h2>abstract satisfaction</h2>
+            <p>Doctoral thesis</p>
+            <span class="tag">paper</span>
+          </div>
+        </a>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>
