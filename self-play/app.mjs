@@ -16,7 +16,7 @@ function attach(){
   worker.onerror=e=>showError(e.message||'Training worker could not start. Serve this page over HTTP or HTTPS.');
   worker.onmessage=({data})=>{
     if(data.type==='state'){
-      const wasRunning=state?.running;state=data;ready=!data.fatal;$('run').disabled=!!data.fatal;render();
+      const wasRunning=state?.running,limitsChanged=JSON.stringify(state?.gpuLimits)!==JSON.stringify(data.gpuLimits);state=data;if(limitsChanged){try{$('model-shape').innerHTML=shapeHTML(readConfig(),configOptions());}catch{}}ready=!data.fatal;$('run').disabled=!!data.fatal;render();
       if(startAfterInit){startAfterInit=false;worker.postMessage({type:'run'});}
       if((data.running&&data.round>0&&Date.now()-lastSave>60000)||(!data.running&&wasRunning&&data.round>0)){lastSave=Date.now();worker.postMessage({type:'export',purpose:'local'});}
     }else if(data.type==='error'){showError(data.message);if(data.fatal)ready=false;$('run').disabled=!ready;$('evaluate-custom').disabled=false;}
@@ -39,7 +39,7 @@ function showError(message){$('error').hidden=false;$('error').textContent=messa
 $('run').onclick=()=>{if(!ready)return;worker.postMessage({type:state.running?'pause':'run'});};
 $('reset').onclick=()=>newRun(false);
 for(const id of ['seed','compare','mode','backend'])$(id).onchange=()=>newRun(false);
-$('preset').onchange=()=>{runConfig={...PRESETS[$('preset').value]};writeConfig(runConfig);newRun(false);};
+$('preset').onchange=()=>{if($('preset').value==='custom'){$('model-settings').open=true;$('config-status').textContent='Custom draft · edit the current values, then Apply. The current run is unchanged.';return;}runConfig={...PRESETS[$('preset').value]};writeConfig(runConfig);newRun(false);};
 $('speed').onchange=()=>worker.postMessage({type:'speed',value:$('speed').value});
 $('save').onclick=()=>{if(ready)worker.postMessage({type:'export'});};
 $('load').onclick=()=>$('file').click();
@@ -129,10 +129,11 @@ function chart(canvas,series,{minimum=8,reference=null,empty='',byte=false,paddi
   if(!points.length){ctx.fillStyle='#7e8f9f';ctx.font='11px -apple-system,sans-serif';ctx.textAlign='center';ctx.fillText(empty,left+cw/2,top+ch*.48);}
 }
 let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{if(state)render();},100);});
-function writeConfig(c){for(const [key] of FIELDS)$('cfg-'+key).value=c[key];$('model-shape').innerHTML=shapeHTML(c);$('config-status').textContent='';}
-function readConfig(){return validateConfig({...runConfig,...Object.fromEntries(FIELDS.map(([key])=>[key,Number($('cfg-'+key).value)]))});}
+function configOptions(){return {compare:$('compare').checked,deviceLimits:$('backend').value==='webgpu'?state?.gpuLimits:null};}
+function writeConfig(c){for(const [key] of FIELDS)$('cfg-'+key).value=c[key];$('model-shape').innerHTML=shapeHTML(c,configOptions());$('config-status').textContent='';}
+function readConfig(){return validateConfig({...runConfig,...Object.fromEntries(FIELDS.map(([key])=>[key,Number($('cfg-'+key).value)]))},configOptions().deviceLimits??{});}
 $('config-fields').innerHTML=FIELDS.map(([key,label,min,max,step,concept])=>`<label><span data-concept="${concept}">${label}</span><input id="cfg-${key}" type="number" min="${min}" max="${max}" step="${step}"></label>`).join('');
-$('config-fields').addEventListener('input',()=>{try{$('model-shape').innerHTML=shapeHTML(readConfig());$('config-status').textContent='Changes prepared · apply to create a new run.';}catch(e){$('config-status').textContent=e.message;}});
+$('config-fields').addEventListener('input',()=>{$('preset').value='custom';try{$('model-shape').innerHTML=shapeHTML(readConfig(),configOptions());$('config-status').textContent='Custom draft · current run unchanged. Apply to create a new run.';}catch(e){$('config-status').textContent=`Custom draft is invalid: ${e.message} Current run unchanged.`;}});
 $('apply-config').onclick=()=>{try{runConfig=readConfig();$('preset').value='custom';newRun(false);$('config-status').textContent='Applied · new models ready when initialization finishes.';}catch(e){$('config-status').textContent=e.message;}};
 $('curriculum-sort').onchange=renderPrograms;
 $('extra-diagnostics').ontoggle=renderDiagnostics;

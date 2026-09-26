@@ -8,7 +8,7 @@ export async function createGPUBackend(){
  return new GPUBackend(tf);
 }
 export class GPUBackend{
- constructor(tf){this.tf=tf;this.name='WebGPU';this.passes=0;}
+ constructor(tf){this.tf=tf;this.name='WebGPU';this.passes=0;const limits=tf.backend()?.device?.limits;this.limits=limits?{maxStorageBufferBindingSize:limits.maxStorageBufferBindingSize,maxBufferSize:limits.maxBufferSize}:null;}
  tensors(model){const tf=this.tf,{dim:d,ffMultiplier}=model.config,f=d*ffMultiplier;return model.blocks.map(b=>{const name=b.name.replace(/^layer\d+_/,''),shape=name==='embedding'?[model.config.vocab+1,d]:name==='position'?[model.config.context,d]:['query','key','value','attention'].includes(name)?[d,d]:name==='up'?[f,d]:name==='down'?[d,f]:name==='output'?[model.config.vocab,d]:[b.w.length];return tf.tensor(b.w,shape);});}
  forward(model,targets,weights){
  const tf=this.tf,{dim:d,heads:h,vocab:v,layers}=model.config,n=targets.length,k=d/h,W=Object.fromEntries(model.blocks.map((b,i)=>[b.name,weights[i]]));

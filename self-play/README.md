@@ -35,12 +35,31 @@ step:
 | `app.mjs` | Live data display, plots, controls, local persistence |
 
 The presets use one pre-normalized layer, two attention heads and an MLP of
-twice the model width. The settings foldout configures 1–3 layers, width 8–96,
-1–8 heads (width must be divisible), MLP ratio 1–4, context and training budgets.
+twice the model width. The settings foldout supports substantially larger custom
+models: up to 128 layers, width 8,192, 128 heads, and 32,768-token contexts, subject
+to valid integer shapes and the actual selected device's single-buffer limits.
+Width must divide evenly into the number of heads; MLP multipliers, program pools,
+execution budgets and replay capacity are independently configurable. These broad
+technical bounds are not a recommendation to select every maximum simultaneously.
 All configurations use RMS normalization, learned positions and ReLU activations. These
 are small ordinary attention networks, not Llama replicas. Generator embeddings
 and output head use 19 instruction tokens; the learner's output head uses all
 256 bytes. Each has an additional learned beginning-of-sequence embedding.
+
+Selecting **Custom** opens the settings and preserves their current values.
+Editing any numeric field immediately labels the configuration as a custom draft;
+it does not reset the current run. **Apply** creates the configured models.
+Selecting Quick or Long run restores that preset's actual defaults and starts a
+fresh run.
+
+The foldout estimates CPU model/gradient/Adam state, the optional control,
+recursive historical copies and forward/backward working storage. It does not
+infer available RAM or promise GPU utilization. WebGPU validates each tensor
+against the initialized device's `maxStorageBufferBindingSize` and `maxBufferSize`
+before allocating model arrays; there is no universal 128 MiB GPU cap. The CPU
+path retains a conservative single-array bound just below 2 GiB. Aggregate memory,
+backend workspaces, checkpoint serialization and JavaScript program banks can
+exhaust memory even when every individual allocation meets those limits.
 
 | Setting | Quick | Long run |
 | --- | ---: | ---: |

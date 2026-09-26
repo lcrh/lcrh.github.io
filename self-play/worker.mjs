@@ -10,7 +10,7 @@ function evaluateNow() {
 }
 // Preserve the whole time axis while bounding UI/export memory for long runs.
 function compact(a,limit) {if(a.length>limit){const old=a.splice(0,Math.floor(limit/2));a.unshift(...old.filter((_,i)=>i%2===0));}}
-function state() {return {type:'state',running,round:trainer.round,elapsed,latest:trainer.latest,prior:control?.latest,history,evaluations,initial,evaluation:lastEvaluation,parameters:trainer.learner.size+trainer.generator.size,config:trainer.config,backend:backend?.name??'CPU',gpuPasses:backend?.passes??0,fatal};}
+function state() {return {type:'state',running,round:trainer.round,elapsed,latest:trainer.latest,prior:control?.latest,history,evaluations,initial,evaluation:lastEvaluation,parameters:trainer.learner.size+trainer.generator.size,config:trainer.config,backend:backend?.name??'CPU',gpuPasses:backend?.passes??0,gpuLimits:backend?.limits??null,fatal};}
 async function loop() {
   if(busy||!running)return;if(pendingMessages){setTimeout(loop,10);return;}busy=true;
   try {
@@ -28,7 +28,7 @@ async function handle(data){
     if(fatal&&!['init','restore','speed'].includes(data.type))throw Error('This interrupted run cannot continue or be exported. Start a new run or restore a completed checkpoint.');
     if(data.type==='init'){
       backend=data.backend==='cpu'?null:await createGPUBackend();
-      trainer=new Trainer(validateConfig({...PRESETS[data.preset??'quick'],...data.config,seed:data.seed,mode:data.mode??'selfplay'}));
+      trainer=new Trainer(validateConfig({...PRESETS[data.preset??'quick'],...data.config,seed:data.seed,mode:data.mode??'selfplay'},backend?.limits??{}));
       control=data.compare?new Trainer({...trainer.config,mode:'prior'}):null;
       fatal=false;initial=evaluate(trainer.learner);history=[];evaluations=[];elapsed=0;evaluateNow();postMessage(state());
     } else if(data.type==='run'){running=true;postMessage(state());loop();}
@@ -55,7 +55,7 @@ async function handle(data){
 function validate(t,depth=0){
   if(depth>32||t.version!==1||!Number.isSafeInteger(t.round)||t.round<0)throw Error('Invalid checkpoint state');
   const c=t.config;
-  validateConfig(c);
+  validateConfig(c,backend?.limits??{});
   const reference=new Trainer(c);
   for(const name of ['learner','generator']){
     const actual=t[name],expected=reference[name];

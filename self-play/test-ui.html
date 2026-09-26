@@ -6,6 +6,21 @@ async function until(fn,label){for(let i=0;i<200;i++){if(fn())return;await wait(
 function assert(x,label){if(!x)throw Error(label);}
 try{await until(()=>frame.contentDocument?.querySelector('#run')&&!frame.contentDocument.querySelector('#run').disabled,'models ready');const d=frame.contentDocument,w=frame.contentWindow,$=s=>d.querySelector(s);
 assert($('#model-info').textContent.includes('WebGPU'),'WebGPU backend displayed');for(const e of ENTRYPOINTS)assert($(e.selector),'Entry selector missing '+e.selector);log('PASS all static entrypoints mounted');
+let configState=null;d.addEventListener('training-view',e=>{configState=e.detail;});
+const originalWidth=$('#cfg-dim').value,originalClock=$('#clock').textContent;
+$('#preset').value='custom';$('#preset').dispatchEvent(new w.Event('change',{bubbles:true}));
+assert($('#model-settings').open,'Custom opens settings');assert($('#cfg-dim').value===originalWidth,'Custom preserves values');assert($('#clock').textContent===originalClock,'Custom does not reset run');
+$('#cfg-dim').value='32';$('#cfg-dim').dispatchEvent(new w.Event('input',{bubbles:true}));
+$('#cfg-layers').value='2';$('#cfg-layers').dispatchEvent(new w.Event('input',{bubbles:true}));
+assert($('#preset').value==='custom','Field edit marks Custom');assert($('#config-status').textContent.includes('current run unchanged'),'Draft is unapplied');assert(configState===null,'Draft emitted no replacement model state');
+$('#apply-config').click();await until(()=>configState?.config.dim===32&&configState?.config.layers===2&&!$('#run').disabled,'custom model configuration applied');
+assert($('#model-shape').textContent.includes('width 32'),'Custom shape displayed');
+$('#preset').value='quick';$('#preset').dispatchEvent(new w.Event('change',{bubbles:true}));
+assert($('#cfg-dim').value==='24'&&$('#cfg-layers').value==='1','Quick restores actual defaults');
+await until(()=>configState?.config.dim===24&&configState?.config.layers===1&&!$('#run').disabled,'quick models restored');
+$('#cfg-lr').value='.002';$('#cfg-lr').dispatchEvent(new w.Event('input',{bubbles:true}));assert($('#preset').value==='custom','Training-field edit marks Custom');
+$('#preset').value='quick';$('#preset').dispatchEvent(new w.Event('change',{bubbles:true}));await until(()=>!$('#run').disabled,'ready after preset reset');
+log('PASS Custom selection, draft-only edits, actual applied shape, and preset restoration');
 $('#run').click();await until(()=>/\d+ training rounds/.test($('#clock').textContent)&&parseInt($('#clock').textContent)>=3,'training rounds');$('#run').click();await until(()=>$('#run').textContent==='Resume training','paused');
 const rewards=[...d.querySelectorAll('.program-row .reward')].map(x=>Number(x.textContent));assert(rewards.every((x,i)=>i===0||x<=rewards[i-1]),'Reward order');log('PASS genuine GPU rounds and reward sorting');
 $('#selected-reward').click();await until(()=>$('.concept-tooltip .live-diagnostic'),'row diagnostic');const root=$('.concept-tooltip'),frozen=root.querySelector('.live-diagnostic').textContent;
