@@ -1,5 +1,6 @@
 // Full transformer forward passes and reverse-mode parameter gradients on WebGPU.
 // CPU owns the interpreter, sampling cache, reward reduction, and Adam state.
+function requireFinite(values,stage,block){for(let i=0;i<values.length;i++)if(!Number.isFinite(values[i])){const error=new Error(`Nonfinite ${stage}${block?' in '+block:''} at index ${i}; training stopped before applying invalid gradients.`);error.nonfinite={stage,block,index:i,value:String(values[i])};throw error;}}
 export async function createGPUBackend(){
  await import('./vendor/tf-4.22.0.min.js');await import('./vendor/tf-webgpu-4.22.0.min.js');
  const tf=globalThis.tf;if(!navigator.gpu)throw Error('WebGPU is unavailable in this browser. Choose CPU explicitly, or open this page in a browser with WebGPU enabled.');
@@ -31,16 +32,34 @@ export class GPUBackend{
  const tokenLoss=logp.mul(target).sum(-1).neg();return {p:tf.softmax(logits),tokenLoss,loss:tokenLoss.mean()};
  }
  async operation(op){
+  for(const b of op.model.blocks)requireFinite(b.w,'GPU input weights',b.name);
+  if(op.kind==='generator')requireFinite(op.weights.map(w=>w.weight),'GPU generator objective weights');
   const tf=this.tf,weights=this.tensors(op.model);let output,gradients;
   try{
    if(op.kind==='generator'){
-    gradients=tf.tidy(()=>tf.grads((...w)=>tf.addN(op.rows.map((r,i)=>this.forward(op.model,r.tokens,w).tokenLoss.sum().mul(op.weights[i].weight))))(weights));
-    const values=await Promise.all(gradients.map(t=>t.data()));op.model.blocks.forEach((b,i)=>b.g.set(values[i]));return;
+    // A pooled variable-length autodiff graph produced incorrect finite values
+    // and NaNs on WebGPU. Differentiate each unchanged weighted row on the GPU,
+    // then sum its checked gradients. This is the same sum-of-sequences objective
+    // and still leads to exactly one generator Adam update in Trainer.
+    const sums=op.model.blocks.map(b=>new Float64Array(b.w.length));
+    for(let row=0;row<op.rows.length;row++){
+     gradients=tf.tidy(()=>tf.grads((...w)=>this.forward(op.model,op.rows[row].tokens,w).tokenLoss.sum().mul(op.weights[row].weight))(weights));
+     const values=await Promise.all(gradients.map(t=>t.data()));
+     values.forEach((g,i)=>requireFinite(g,'GPU gradient',op.model.blocks[i].name));
+     for(let b=0;b<sums.length;b++)for(let i=0;i<sums[b].length;i++)sums[b][i]+=values[b][i];
+     tf.dispose(gradients);gradients=undefined;
+    }
+    // Validate accumulated values AND their Float32 representation before any
+    // model gradient is changed. Partial or overflowing updates are rejected.
+    const values=sums.map((g,i)=>{requireFinite(g,'GPU gradient sum',op.model.blocks[i].name);const value=Float32Array.from(g);requireFinite(value,'GPU gradient sum',op.model.blocks[i].name);return value;});
+    op.model.blocks.forEach((b,i)=>b.g.set(values[i]));return;
    }
    if(op.kind==='learner'){
     gradients=tf.tidy(()=>tf.grads((...w)=>{const f=this.forward(op.model,op.targets,w);output={p:tf.keep(f.p),tokenLoss:tf.keep(f.tokenLoss),loss:tf.keep(f.loss)};return f.loss;})(weights));
    }else output=tf.tidy(()=>this.forward(op.model,op.targets,weights));
    const [p,tokenLoss,loss,...g]=await Promise.all([output.p.data(),output.tokenLoss.data(),output.loss.data(),...(gradients??[]).map(t=>t.data())]);
+   requireFinite(p,'GPU probabilities');requireFinite(tokenLoss,'GPU token loss');requireFinite(loss,'GPU loss');
+   g.forEach((values,i)=>requireFinite(values,'GPU gradient',op.model.blocks[i].name));
    if(gradients)op.model.blocks.forEach((b,i)=>b.g.set(g[i]));this.passes++;
    return {p,tokenLoss,loss:loss[0],n:op.targets.length,targets:op.targets};
   }finally{tf.dispose(weights);tf.dispose(output);tf.dispose(gradients);}

@@ -136,3 +136,78 @@ The independent reviewer checked all companion articles against the paper and so
 The reviewer then checked actual multilayer and GPU tensor code. Added independent tests cover 87 finite differences in a three-layer/four-head model, causality, cached sampling, mixed-sign generator gradients, 12 asynchronous rounds compared with retained historical snapshots, complete optimizer/RNG/bank equality, checkpoint continuation and tensor disposal. These independent tensor-graph tests run on TensorFlow’s CPU test executor; the separate browser `test-gpu.html` supplies actual GPU-device evidence.
 
 The audit identified one failure-state issue: an interrupted GPU round could advance randomness before an error and then be resumed. This has been fixed by marking partial training failures fatal, preventing continuation/export, and requiring a fresh run or completed checkpoint. Restore also rejects mismatched main/control round counts. GPU reproducibility claims are scoped to the same device/backend/runtime, not arbitrary devices.
+
+## Follow-up: empty output and model depth
+
+The paper explicitly zero-extends short output in [Appendix E](https://arxiv.org/html/2609.30063v1#A5).
+Its [learner objective](https://arxiv.org/html/2609.30063v1#S2.SS2) averages output
+content-token losses; no explicit padding mask was found in the paper. The
+implementation trains on the full fixed-length byte row. Consequently `F` emits
+nothing but supplies constant zeros, and `.F` supplies exactly the same training
+values despite genuinely printing its first zero. This behavior is consistent
+with the stated environment, rather than evidence that execution was bypassed.
+Masking unprinted positions would be an explicit environment ablation, not a
+correction justified by an author-specified mask. The authors' training code was
+not independently inspected to resolve any ambiguity beyond the paper text.
+
+In a real WebGPU check with Quick defaults except four layers, seed 7, immediate
+termination probability remained approximately 5.0–5.4% through round 150. Mean
+`F` reward in the 25-round windows ending at rounds 25/50/75/100/125/150 was
+0.404/1.537/1.562/0.475/0.123/0.0476. Identical all-zero rows had exactly equal
+rewards within each round. A separate CPU check of Quick defaults, seed 7, ended
+at round 300 with first-token `F` probabilities 4.41% (one layer) and 2.94%
+(four layers). The GPU harness is retained as `test-depth-gpu.html` and
+`test-depth-gpu.mjs`; it records source-specific frequencies and reward windows.
+
+These observations show transient high empty-output reward without immediate
+termination collapse in these bounded runs. They do not establish stability for
+other seeds, larger settings, or longer training. Reward-sorted rows mix fresh,
+replayed and mutated programs and must not be read as policy probabilities.
+Absolute gradient alignment can also reward a negative signed inner product;
+it guarantees neither monotonic reward decay nor eventual curriculum complexity.
+
+**Subsequent numerical failure:** continuing that four-layer GPU run showed finite
+generator probabilities at round 375 (`p(F)` = 0.0514047), followed by NaN
+probabilities by round 400 while learner rewards remained finite. The sampler's
+fallback selected the final vocabulary entry, `F`, when NaN comparisons failed.
+The earlier bounded observations therefore do not establish long-run numerical
+stability. The first-failure harness now checks GPU outputs, parameter gradients
+and Adam boundaries, and retains the preceding complete trainer checkpoint and
+the offending operation. This failure must not be interpreted as learned
+termination behavior.
+
+The first invalid gradient occurred at update 378 with finite model weights
+(maximum magnitude 1.11355) and finite objective coefficients (−0.1564 to 0.2944).
+The exact pooled TensorFlow graph on its CPU executor matched the independent
+manual derivative within 9.54e−7. Repeating the former pooled WebGPU graph
+produced incorrect finite gradients as well as the original NaNs: observed
+maximum errors included 2.4936 and 7.04e10. Each of the twelve individual GPU
+rows instead matched the manual derivative within 4.17e−7. This localizes the
+observed fault to pooled GPU graph execution; the specific underlying backend
+kernel defect has not been identified.
+
+The production workaround computes each unchanged signed weighted row gradient
+on the GPU, sums checked values in double-precision CPU buffers, then validates
+the Float32 result before copying any gradient into the model. There remains one
+generator Adam update. No learning-progress formula, padding convention, policy
+coefficient, prior or program filter changes. The summation schedule changes
+floating-point arithmetic, so current exports use outer checkpoint format
+version 2 and GPU revision `webgpu-rowwise-v2`. Older format-version-1 exports,
+including CPU exports, are rejected with a fresh-start instruction. In
+particular, the new arithmetic cannot safely replay old pooled-GPU histories.
+
+The exact-input fixture `fixtures/gpu-gradient-round378.json` preserves weights,
+program tokens and objective coefficients without optimizer history. The real
+GPU regression passed three times with maximum CPU discrepancy 1.252e−6.
+Tests also passed second-row NaN rejection with no partial gradient writes,
+same-input repeatability, ten-round exact history, checkpoint continuation and
+zero retained tensors. A fresh corrected four-layer Quick run, seed 7, then
+completed 500 actual GPU rounds in 193.1 seconds, with finite checks throughout
+and zero retained tensors. Final first-token `F` probability was 0.02453 and
+entropy 4.1710 bits. In the final 25 rounds, fresh `F` frequency was 3.33%, mean
+`F` reward was 0.02888, and mean reward for rows containing a nonzero byte was
+0.37689; no top-three displayed row was `F`. This is bounded evidence for the
+specific numerical fix, not an arbitrary-duration stability or transfer claim.
+The actual browser interaction suite also passed GPU startup, sorted rows,
+six-level nested math explanations, frozen diagnostics, units, custom evaluation,
+stepped execution and both maps after the fix.

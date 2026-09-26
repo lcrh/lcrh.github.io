@@ -84,7 +84,7 @@
 - **Eight primitive instructions** (brainfuck); paper A5; links: program, machine, macros, budgets, random-tape, padding; shortest UI route: generator → brainfuck
 - **The ten macro instructions** (macros); paper A5; links: brainfuck, prior-control, budgets, program, tabula-rasa; shortest UI route: generator → macros
 - **Random input and reproducible execution** (random-tape); paper A5; links: noise-trap, program, replay, seed; shortest UI route: overview → random-tape
-- **Emitted bytes versus zero padding** (padding); paper A5; links: cross-entropy, emissions, transfer, zero-reward; shortest UI route: padding
+- **Emitted bytes versus zero padding** (padding); paper A5; links: cross-entropy, emissions, transfer, zero-reward, gradient-reward; shortest UI route: padding
 - **Time, memory and context budgets** (budgets); paper A5; links: machine, context, demo-differences, program-length, padding; shortest UI route: budgets
 - **Termination, length caps and likelihood** (termination); paper S2.SS2; links: prior, termination-prior, importance, program-length, kl, policy-gradient, expert-iteration; shortest UI route: generator → termination
 - **Why the prior prefers short programs** (termination-prior); paper S2.SS2; links: prior, solomonoff, termination; shortest UI route: program-length → termination-prior
@@ -103,7 +103,7 @@
 ### 04 · The learning-progress reward
 
 - **A gradient is a local direction** (gradients); paper S2.SS2; links: gradient-reward, directional-derivative, preconditioner, adam; shortest UI route: overview → gradients
-- **The actual gradient-alignment reward** (gradient-reward); paper S2.SS2; links: gradients, preconditioner, history, absolute-value, reward-example, advantage, reward-ablations, kl; shortest UI route: gradient-reward
+- **The actual gradient-alignment reward** (gradient-reward); paper S2.SS2; links: gradients, preconditioner, history, absolute-value, reward-example, advantage, reward-ablations, padding, kl; shortest UI route: gradient-reward
 - **A worked alignment calculation** (reward-example); paper S2.SS2; links: gradient-reward, absolute-value, preconditioner, directional-derivative, policy-gradient; shortest UI route: gradient-reward → reward-example
 - **Why Adam changes the inner product** (preconditioner); paper S2.SS2; links: adam, gradient-reward, directional-derivative, history, gradients, reward-ablations; shortest UI route: overview → preconditioner
 - **AdamW and bias-corrected moments** (adam); paper S2.SS2; links: preconditioner, gradients, zero-reward, demo-differences; shortest UI route: adam
@@ -164,7 +164,7 @@
 - **The universal-data scaling hypothesis** (ansatz); paper S4; links: universal-structure, contingent, exponents, scaling, limitations; shortest UI route: overview → ansatz
 - **Why similar scaling exponents are suggestive** (exponents); paper S4; links: ansatz, scaling, compute-frontier, limitations; shortest UI route: overview → ansatz → exponents
 - **How this connects to other approaches** (related-work); paper S5; links: solomonoff, tabula-rasa, noise-trap, epiplexity, gradient-reward; shortest UI route: overview → experiments → pcfg → related-work
-- **What this experiment does not establish** (limitations); paper S6; links: experiments, tuning, probes, validation, ansatz, padding, archive; shortest UI route: overview → limitations
+- **What this experiment does not establish** (limitations); paper S6; links: experiments, tuning, probes, validation, ansatz, padding, archive, gradient-reward; shortest UI route: overview → limitations
 
 ### 08 · This browser experiment
 

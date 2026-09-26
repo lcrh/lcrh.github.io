@@ -46,3 +46,36 @@ const weights=generatorWeights([{reward:1,logp:-4,oldLogp:-5,tokens:[0,1],source
 close(weights[0].ratio,Math.E);assert.equal(weights[1].pg,0);assert.equal(weights[2].pg,0);close(weights.reduce((s,x)=>s+x.ei,0),1);
 const zeros=generatorWeights([{reward:0,logp:-Math.log(19),oldLogp:-Math.log(19),tokens:[END],source:'fresh'}],.02,1);assert.equal(zeros[0].ei,0);assert.ok(Number.isFinite(zeros[0].weight));
 console.log('Policy objective: original proposal likelihood, mutation exclusion (including replay), normalized EI, zero-reward safety pass');
+
+// One bad scalar must stop before Adam can contaminate otherwise valid state.
+for(const field of ['w','g','m','v']){
+  const bad=new Transformer({vocab:7,dim:8,context:8});bad.blocks.at(-1)[field][0]=NaN;
+  const before=structuredClone({step:bad.step,lastLR:bad.lastLR,blocks:bad.blocks});
+  assert.throws(()=>bad.update(.001),/Numerical failure/);
+  assert.deepEqual({step:bad.step,lastLR:bad.lastLR,blocks:bad.blocks},before,'Rejected Adam state must remain unchanged');
+}
+{
+  const bad=new Transformer({vocab:7,dim:8,context:8});bad.blocks.at(-1).v[0]=-1;
+  assert.throws(()=>bad.update(.001),/negative Adam variance/);
+  bad.blocks.at(-1).v[0]=0;bad.blocks.at(-1).g[0]=1;
+  const before=structuredClone({step:bad.step,lastLR:bad.lastLR,blocks:bad.blocks});
+  assert.throws(()=>bad.update(1e300),/proposed parameter/);
+  assert.deepEqual({step:bad.step,lastLR:bad.lastLR,blocks:bad.blocks},before,'Overflowing Float32 proposal must be atomic');
+  bad.bias.w[0]=NaN;
+  assert.throws(()=>bad.forward([1,2]),/Numerical failure/);
+  assert.throws(()=>bad.sample(new Random(1),6,8),/Numerical failure/,'NaN must not silently select the last token');
+  assert.throws(()=>bad.sample(new Random(1),6,9),/outside model context/);
+}
+{
+  const guarded=new Transformer({vocab:7,dim:8,context:8}),original=new Transformer({vocab:7,dim:8,context:8});
+  for(let step=0;step<5;step++){
+    guarded.blocks.forEach((b,j)=>b.g.forEach((_,i)=>b.g[i]=original.blocks[j].g[i]=Math.sin(i+step)*100));
+    guarded.update(.001);
+    let ss=0;for(const b of original.blocks)for(const g of b.g)ss+=g*g;
+    const factor=Math.min(1,1/(Math.sqrt(ss)+1e-12));original.step++;original.lastLR=.001;
+    const c1=1-.9**original.step,c2=1-.999**original.step;
+    for(const b of original.blocks)for(let i=0;i<b.w.length;i++){const g=b.g[i]*factor;b.m[i]=.9*b.m[i]+.1*g;b.v[i]=.999*b.v[i]+.001*g*g;b.w[i]-=.001*((b.m[i]/c1)/(Math.sqrt(b.v[i]/c2)+1e-8)+.01*b.w[i]);}
+    original.zero();assert.deepEqual(guarded.serialize(),original.serialize(),'Finite-input Adam arithmetic must remain bit-exact');
+  }
+}
+console.log('Numerical guards: bad scalars and overflowing proposals rejected atomically; NaN cannot sample F; finite Adam bit-exact');

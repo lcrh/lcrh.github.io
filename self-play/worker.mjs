@@ -2,15 +2,16 @@ import {Trainer,PRESETS,evaluate} from './trainer.mjs';
 import {createGPUBackend} from './gpu.mjs';
 import {validateConfig} from './config.mjs';
 import {execute,Random,tokensOf} from './machine.mjs';
+const GPU_REVISION='webgpu-rowwise-v2',CPU_REVISION='cpu-v1';
 let fatal=false,backend=null,trainer,control,running=false,busy=false,speed='full',lastSent=0,elapsed=0,history=[],evaluations=[],initial=null,lastEvaluation=null;
-function pack() {return {version:1,kind:'self-play-browser',backend:backend?.name??'CPU',trainer:trainer.serialize(),control:control?.serialize()??null,elapsed,history,evaluations,initial,lastEvaluation};}
+function pack() {return {version:2,kind:'self-play-browser',backend:backend?.name??'CPU',backendRevision:backend?GPU_REVISION:CPU_REVISION,trainer:trainer.serialize(),control:control?.serialize()??null,elapsed,history,evaluations,initial,lastEvaluation};}
 function evaluateNow() {
   lastEvaluation={round:trainer.round,self:evaluate(trainer.learner),prior:control?evaluate(control.learner):null};
   evaluations.push(lastEvaluation);compact(evaluations,500);
 }
 // Preserve the whole time axis while bounding UI/export memory for long runs.
 function compact(a,limit) {if(a.length>limit){const old=a.splice(0,Math.floor(limit/2));a.unshift(...old.filter((_,i)=>i%2===0));}}
-function state() {return {type:'state',running,round:trainer.round,elapsed,latest:trainer.latest,prior:control?.latest,history,evaluations,initial,evaluation:lastEvaluation,parameters:trainer.learner.size+trainer.generator.size,config:trainer.config,backend:backend?.name??'CPU',gpuPasses:backend?.passes??0,gpuLimits:backend?.limits??null,fatal};}
+function state() {return {type:'state',running,round:trainer.round,elapsed,latest:trainer.latest,prior:control?.latest,history,evaluations,initial,evaluation:lastEvaluation,parameters:trainer.learner.size+trainer.generator.size,config:trainer.config,backend:backend?.name??'CPU',backendRevision:backend?GPU_REVISION:CPU_REVISION,gpuPasses:backend?.passes??0,gpuLimits:backend?.limits??null,fatal};}
 async function loop() {
   if(busy||!running)return;if(pendingMessages){setTimeout(loop,10);return;}busy=true;
   try {
@@ -36,9 +37,15 @@ async function handle(data){
     else if(data.type==='speed')speed=data.value;
     else if(data.type==='export'){postMessage({type:'checkpoint',data:pack(),purpose:data.purpose??'download'});}
     else if(data.type==='restore'){
-      if((data.data.backend??'CPU')!==(data.backend==='cpu'?'CPU':'WebGPU'))throw Error('Resume a checkpoint on the backend that created it to preserve historical reconstruction.');
+      const p=data.data;if(p.kind!=='self-play-browser'||p.version!==2)throw Error('This checkpoint uses an unsupported format. Only version 2 checkpoints can be resumed. Start a new run.');
+      const savedBackend=p.backend;
+      if(!['CPU','WebGPU'].includes(savedBackend))throw Error('This checkpoint must name a supported numerical backend.');
+      // Recursive replay must use the numerical schedule that created every
+      // historical update, not merely a backend with the same visible name.
+      if(savedBackend==='WebGPU'&&p.backendRevision!==GPU_REVISION)throw Error('This GPU checkpoint predates the corrected gradient calculation or uses an incompatible numerical revision. Old GPU gradients could be incorrect, and historical replay cannot be reconstructed with the corrected calculation. Start a new GPU run; this checkpoint cannot be resumed.');
+      if(savedBackend==='CPU'&&p.backendRevision!==CPU_REVISION)throw Error('This CPU checkpoint uses an incompatible numerical revision.');
+      if(savedBackend!==(data.backend==='cpu'?'CPU':'WebGPU'))throw Error('Resume a checkpoint on the backend that created it to preserve historical reconstruction.');
       backend=data.backend==='cpu'?null:await createGPUBackend();
-      const p=data.data;if(p.kind!=='self-play-browser'||p.version!==1)throw Error('This is not a compatible Self-play checkpoint.');
       validate(p.trainer);if(p.control){validate(p.control);if(p.control.round!==p.trainer.round)throw Error('Checkpoint control and learner rounds do not match.');}
       trainer=Trainer.restore(p.trainer);control=p.control?Trainer.restore(p.control):null;elapsed=p.elapsed;history=p.history;evaluations=p.evaluations;initial=p.initial;lastEvaluation=p.lastEvaluation;running=false;fatal=false;postMessage(state());
     } else if(data.type==='evaluate-custom'){

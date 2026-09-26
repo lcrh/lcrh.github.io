@@ -67,6 +67,8 @@ The live forecasts use [[teacher-forcing]]: each prediction sees the true earlie
 a('program','A program you can execute','programs','A sequence of instructions whose real execution supplies the learner’s bytes.',String.raw`
 The string in a curriculum row is actual source code. Its loops, reads and writes run on a [[machine|bounded byte-tape machine]]. A small source string can print many bytes; source length and output length are different quantities.
 
+F means stop. A program consisting only of F emits no bytes, but its fixed-length training row still contains zeros in every position. The learner therefore receives a real [[padding|constant-zero prediction task]] from it. The curriculum is sorted by reward by default and also contains replay and mutations; seeing F near the top does not measure how often the generator samples F.
+
 ## Read an example
 The hand-written illustration +[.++]F starts at zero, increments to one, then repeatedly prints and adds two. With byte wraparound it emits 1, 3, 5, … . This example explains the interpreter; it is not inserted into the training pool.
 
@@ -113,6 +115,8 @@ Each displayed row records the random-generator state immediately before executi
 A program that prints fresh random input repeatedly can generate hard-to-predict data. That is the [[noise-trap|difficulty reward's failure case]]; randomness and useful structure are different.`, 'noise-trap program replay seed','A5');
 a('padding','Emitted bytes versus zero padding','programs','The learner trains on a fixed-length row, even when the program prints almost nothing.',String.raw`
 A program may halt after three emissions while the output budget is 64. Its training row contains those three bytes followed by 61 zeros. A zero that was explicitly printed is an emitted byte; an unfilled slot is padding. Their numeric values may be identical, but their origins differ.
+
+This follows the paper's explicit zero-padding convention in Appendix E. F alone prints nothing, yet trains on a full row of zeros. By contrast, .F prints one genuine zero and pads the remaining positions. Both rows contain the same values, so they have identical learner gradients and [[gradient-reward|rewards]] when evaluated in the same round. The learner does not see where padding begins.
 
 \[L_{\rm batch}=qL_{\rm emitted}+(1-q)L_{\rm padding},\]
 
@@ -239,6 +243,8 @@ Read this in pieces: compute the row's [[gradients|loss gradient]]; subtract cur
 ## Why use a historical direction?
 Training can accumulate repeatable structure across many updates, while unrelated noise can cancel. The reward measures sensitivity along that accumulated direction. This is a heuristic for useful learning progress, not a proof that a rewarded program improves every downstream task.
 
+A high reward can come from learning [[padding|constant zeros]] early in training. It does not certify a complicated program. Neither reward nor its decline is guaranteed to be monotonic: the current gradient, historical checkpoint and Adam scale all change, and the absolute value also rewards a large negative inner product.
+
 ## Read the live calculation
 The hover diagnostic uses the selected row's actual pre-update gradient. Signed block contributions sum to the displayed inner product. Their positive and negative parts may be individually large; only the magnitude of the net sum is rewarded. [[advantage|Batch normalization]] and the [[kl|prior penalty]] then determine the policy weight.
 
@@ -329,6 +335,8 @@ a('zero-reward','Why the first round has zero reward','reward','At initializatio
 At index \(e=0\), the historical reference is also checkpoint zero, so \(\delta\theta_0=0\). Every gradient-alignment reward is zero regardless of how difficult the output is.
 
 The learner still trains on the first randomly generated pool. Once it moves, the next round has a nonzero historical difference and can produce informative rewards. The generator also has its [[kl|prior regularizer]], whose value may be small near its near-uniform initialization.
+
+Zero emitted bytes does not mean zero reward. F stops immediately, but its [[padding|full zero-padded row]] trains the learner. After the initial round, that simple task can have a large alignment reward while the learner is still acquiring it. This is different from the zero historical difference at startup.
 
 The reward-standardization denominator has an epsilon. [[expert-iteration]] contributes zero when its positive-reward sum is zero; dividing blindly by that sum would create NaNs. These are numerical edge cases, not reasons to seed the run with hand-designed examples.
 
@@ -713,6 +721,8 @@ The paper's empirical results concern specific architectures, budgets, program s
 Important questions remain about scaling to larger models, designing more expressive search spaces, separating the causal role of discovered program families, and practical total-compute accounting. Validation-based [[tuning]] also qualifies the “zero data” framing.
 
 The browser is smaller still. A few fixed [[probes]] can improve while other capabilities worsen; different seeds can follow different paths. Low [[padding|padding loss]], many [[archive|archive niches]], high reward or long programs are not interchangeable with useful transfer.
+
+An early high-reward F row can reflect learning the zero padding supplied after an empty execution. The reward-sorted curriculum includes replay and mutations, so its leading rows are not an estimate of the generator's sampling probabilities. Changing model depth, rates or budgets can change the trajectory; a healthy run at one setting does not rule out collapse elsewhere. The [[gradient-reward|absolute alignment heuristic]] does not guarantee that each simple program's reward falls steadily or that the curriculum eventually becomes more complex.
 
 The [[validation|independent audit]] checks whether the stated mechanism is genuinely implemented. It cannot certify all scientific conclusions of the paper or predict what this particular run will eventually discover.`, 'experiments tuning probes validation ansatz','S6');
 a('diagnostics','What the optional diagnostics measure','practice','Direct observations of this run, with hover explanations tied to captured data.',String.raw`

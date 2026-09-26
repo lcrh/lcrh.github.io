@@ -91,6 +91,12 @@ sampled action. Execution stops at the first `F`, program end, output limit or
 primitive-step budget. Unmatched brackets are no-ops. Cells and tape positions
 wrap; input reads fresh independent uniform bytes. Unemitted output is zero padded
 and included in learner training, matching the paper's stated output semantics.
+In particular, `F` emits nothing but supplies a full constant-zero training row.
+`.F` emits one genuine zero and pads the rest; the learner sees identical values
+and assigns both rows identical gradients and reward in the same round. This is
+the explicit environment convention in [Appendix E](https://arxiv.org/html/2609.30063v1#A5),
+not a mask that removes unprinted positions. Excluding padding would be a separate
+environment ablation and would need to preserve genuinely emitted zero bytes.
 
 At round index `e` (the number of completed learner updates), every output row's
 full cross-entropy gradient is calculated before either update. Its reward is
@@ -137,7 +143,19 @@ is guaranteed by the tests within the same runtime, not across all browsers.
 
 WebGPU is the default, with an explicit CPU compatibility option in Model & training settings. Forward passes and all learner/generator training gradients execute on the GPU; interpreter execution, cached token sampling, reward reductions, Adam updates and evaluation use the CPU. TensorFlow.js CPU forwarding is disabled for GPU tensor operations. The page reports its actual backend and does not silently fall back.
 
+Generator gradients are differentiated one weighted program row at a time on
+the GPU, then summed in checked double-precision CPU buffers and converted to
+Float32. This preserves the signed sum-of-sequence-loss objective and its single
+Adam update. It avoids an observed WebGPU error in the former pooled
+variable-length gradient graph; it is not a CPU differentiation fallback.
+Nonfinite probabilities, gradients, weights or proposed optimizer state stop
+the run instead of being converted into program samples.
+
 The full historical trainer hierarchy uses the same backend. GPU results differ slightly from CPU floating-point reductions and can diverge in sampled trajectories over time. Same-device/runtime checks reproduce historical weights and checkpoints exactly; cross-device bit identity is not promised. Checkpoints remember their backend. A failed operation inside a round blocks continuation/export until a new run or completed checkpoint is restored.
+Current exported checkpoints use format version 2 and record the GPU numerical
+revision `webgpu-rowwise-v2`. Older format-version-1 files, including CPU files,
+require a fresh run. In particular, replaying an old pooled-GPU run with the new
+arithmetic would not reconstruct its original halfway weights.
 
 ### Paper companion and interaction map
 
@@ -151,6 +169,9 @@ Hover for a preview, click **Keep open**, and follow links inside to any depth. 
   inspector follows its highest-reward row until you select one. This selection
   only controls the display. In the larger preset the row tape previews the first
   64 of 128 output bytes; the inspector plots the full output.
+  Frequent `F` rows near the top need not mean the generator usually samples `F`:
+  reward sorting, replay and mutation also affect this view. High early reward
+  can reflect learning constant padding, rather than discovering a complex program.
 - Dark underlined cells are padding, including padding after a step-budget halt.
   Emitted zeros are shown separately. The emitted fraction is for the current
   batch, not cumulative.
@@ -242,3 +263,46 @@ the paper's broader scaling, multimodal transfer, or mathematical discoveries.
 Open `test-gpu.html` on a local server for actual WebGPU checks. Learner gradient comparisons (including two layers and 256 outputs) differed from the manual reference by at most 5.96e-8; mixed-sign generator gradients by at most 3.58e-7. Ten real GPU rounds matched a retained-history reference exactly. Same-device checkpoint continuation matched and zero tensors remained allocated. A default browser run completed 467 rounds with its prior control in 72 seconds of measured training time; this is a throughput observation, not a transfer claim.
 
 `test-ui.html` exercises the actual page: GPU startup, sorted rows, nested mathematical explanations, frozen diagnostics, custom evaluation, stepped sandbox execution, and both maps. `test-companion.mjs` checks graph reachability, parameter counts, exact interpreter replay, reward decomposition, statistics and checkpoint continuation. Original preset CPU training weights, RNG and banks remain bit-identical after instrumentation.
+
+### Bounded depth and empty-output diagnostic
+
+`test-depth-gpu.html` runs the real GPU trainer with Quick defaults except four
+layers, seed 7. Through round 150, the probability of `F` as the first generated
+token stayed approximately 5.0–5.4%. Mean `F` reward over consecutive 25-round
+windows ending at 25, 50, 75, 100, 125 and 150 was 0.404, 1.537, 1.562, 0.475,
+0.123 and 0.0476. All identical all-zero output rows had exactly the same reward
+within each round. Thus high early empty-output reward occurred without a large
+increase in the policy's immediate termination probability in this run.
+
+A separate CPU run using Quick defaults and seed 7 reached 300 rounds: immediate
+termination probability was 4.41% with one layer and 2.94% with four layers.
+These are bounded checks of particular configurations, not proof that larger or
+different configurations cannot collapse. GPU and CPU trajectories can diverge.
+The absolute alignment reward is a heuristic; it does not promise a monotonic
+decline in a program's reward or increasingly useful outputs in every run.
+
+**Later failure in the same GPU run:** the generator was finite at round 375
+(first-token `F` probability 5.1405%), but its probabilities were NaN by round 400
+while learner rewards remained finite. The sampler's former fallback then emitted
+`F`, which can look like policy collapse. This was a numerical failure, not evidence
+that the generator learned to prefer empty programs. Instrumentation localized
+the first failure to the generator gradient at update 378: weights and objective
+coefficients were finite. The former pooled GPU graph also returned incorrect
+finite gradients on these inputs; all twelve individual GPU rows matched manual
+CPU gradients within 4.17e−7. The same pooled graph on TensorFlow's CPU executor
+matched within 9.54e−7.
+
+The fix differentiates rows separately on the GPU and sums their gradients before
+the unchanged single optimizer update. The permanent 434 KB regression fixture
+is `fixtures/gpu-gradient-round378.json`; it contains only the exact weights,
+tokens and objective coefficients. Three real-GPU repetitions of the fixed
+full objective matched CPU within 1.252e−6. GPU tests also passed rejection of a
+NaN injected into the second row without partial gradient writes, ten-round
+historical reconstruction, checkpoint continuation and zero retained tensors.
+A fresh corrected four-layer Quick run, seed 7, completed 500 actual GPU rounds
+in 193.1 seconds with finite checked operations and zero retained tensors.
+First-token `F` probability ended at 2.45%; in the final 25 rounds, 3.33% of fresh
+samples were `F`, and mean `F` reward was 0.0289 versus 0.3769 for rows containing
+at least one nonzero output byte. None of the top-three displayed rows in that
+window was `F`. These results support the fix for this bounded reproduction;
+they do not guarantee stability or useful discovery at every size, seed or duration.

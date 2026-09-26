@@ -1,6 +1,7 @@
 // Exercise the exact browser worker message protocol under Node's worker runtime.
 import {Worker} from 'node:worker_threads';
 import assert from 'node:assert/strict';
+import {resourceEstimate} from './config.mjs';
 const url=new URL('./worker.mjs',import.meta.url).href;
 function makeWorker(){
   const w=new Worker(`const {parentPort}=require('node:worker_threads');globalThis.onmessage=null;globalThis.postMessage=x=>parentPort.postMessage(x);import(${JSON.stringify(url)}).then(()=>parentPort.on('message',data=>globalThis.onmessage({data})));`,{eval:true});
@@ -19,6 +20,24 @@ try{
   assert.equal(restored.round,saved.trainer.round);
   const reexport=(await request(b,{type:'export'},checkpoint)).data;
   assert.deepEqual(saved,reexport);
+  assert.equal(saved.backendRevision,'cpu-v1');
+  const estimate=resourceEstimate(saved.trainer.config);assert.equal(estimate.gradientReductionBytes,12*estimate.generator);
+  assert.equal(saved.version,2);
+  for(const oldBackend of ['CPU','WebGPU']){
+    const old=structuredClone(saved);old.version=1;old.backend=oldBackend;
+    await assert.rejects(request(b,{type:'restore',backend:oldBackend==='CPU'?'cpu':'gpu',data:old},state),/Only version 2/);
+    assert.deepEqual((await request(b,{type:'export'},checkpoint)).data,saved,'Old format rejection must leave current run intact');
+  }
+  for(const savedBackend of ['CPU','WebGPU'])for(const revision of [undefined,'old-revision','unknown-future']){
+    const incompatible=structuredClone(saved);incompatible.backend=savedBackend;
+    if(revision===undefined)delete incompatible.backendRevision;else incompatible.backendRevision=revision;
+    await assert.rejects(request(b,{type:'restore',backend:savedBackend==='CPU'?'cpu':'gpu',data:incompatible},state),/numerical revision/);
+    assert.deepEqual((await request(b,{type:'export'},checkpoint)).data,saved,'Incompatible revision must leave current run intact');
+  }
+  const unnamed=structuredClone(saved);delete unnamed.backend;
+  await assert.rejects(request(b,{type:'restore',backend:'cpu',data:unnamed},state),/must name a supported numerical backend/);
+  assert.deepEqual((await request(b,{type:'export'},checkpoint)).data,saved);
+  console.log('Checkpoint format 2: exact CPU roundtrip; old CPU/GPU formats and missing/unknown revisions rejected without changing the run');
   await request(b,{type:'inspect',code:'+[.++]F',seed:42},m=>m.type==='inspect');
   const afterInspect=(await request(b,{type:'export'},checkpoint)).data;
   assert.deepEqual(afterInspect,reexport);

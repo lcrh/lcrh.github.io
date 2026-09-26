@@ -2,6 +2,8 @@
 // Pre-RMSNorm, multihead softmax attention, residual ReLU MLP, learned positions.
 // All embeddings, attention/MLP weights, norms and output weights are trainable.
 import {Random} from './machine.mjs';
+function numericalFailure(where){throw Error('Numerical failure in '+where+'. Training cannot continue safely. Start a new run or restore a completed checkpoint.');}
+function finite(value,where){if(!Number.isFinite(value))numericalFailure(where);return value;}
 function block(name,n,random,scale=0,constant=0) {
   const w=new Float32Array(n);for(let i=0;i<n;i++)w[i]=constant+(random.next()*2-1)*scale;
   return {name,w,g:new Float32Array(n),m:new Float32Array(n),v:new Float32Array(n)};
@@ -44,6 +46,7 @@ export class Transformer {
   forward(targets) {
     const {dim:d,heads:h,vocab:v}=this.config,n=targets.length,k=d/h,f=this.config.ffMultiplier*d;
     if(!n||n>this.config.context)throw Error('Sequence length outside model context');
+    for(const target of targets)if(!Number.isInteger(target)||target<0||target>=v)throw Error('Invalid target token');
     let x=new Float32Array(n*d);
     for(let t=0;t<n;t++)for(let j=0;j<d;j++)x[t*d+j]=this.embedding.w[(t?targets[t-1]:v)*d+j]+this.position.w[t*d+j];
     const layers=[];for(const B of this.layerBlocks){
@@ -65,7 +68,8 @@ export class Transformer {
     const x3=x;
     const c=rms(x3,this.norm3.w,n,d),p=linear(c.y,this.output.w,n,d,v);let loss=0;
     const tokenLoss=new Float32Array(n);
-    for(let t=0;t<n;t++){let max=-Infinity;for(let j=0;j<v;j++){p[t*v+j]+=this.bias.w[j];max=Math.max(max,p[t*v+j]);}let sum=0;for(let j=0;j<v;j++){p[t*v+j]=Math.exp(p[t*v+j]-max);sum+=p[t*v+j];}for(let j=0;j<v;j++)p[t*v+j]/=sum;tokenLoss[t]=-Math.log(Math.max(p[t*v+targets[t]],1e-30));loss+=tokenLoss[t];}
+    for(let t=0;t<n;t++){let max=-Infinity;for(let j=0;j<v;j++){p[t*v+j]+=this.bias.w[j];finite(p[t*v+j],'forward logits');max=Math.max(max,p[t*v+j]);}let sum=0;for(let j=0;j<v;j++){p[t*v+j]=Math.exp(p[t*v+j]-max);sum+=p[t*v+j];}for(let j=0;j<v;j++)p[t*v+j]/=sum;tokenLoss[t]=-Math.log(Math.max(p[t*v+targets[t]],1e-30));loss+=tokenLoss[t];}
+    finite(loss,'forward loss');for(const probability of p)finite(probability,'forward probabilities');
     return {targets,n,...layers[0],layers,x3,c,p,loss:loss/n,tokenLoss};
   }
   backward(c,weight=1,mean=true) {
@@ -106,15 +110,29 @@ export class Transformer {
     return {signed,positive,negative,gradientNorm:Math.sqrt(g2),directionNorm:Math.sqrt(d2),cosine:g2&&d2?signed/Math.sqrt(g2*d2):null,blocks};
   }
   update(lr,{clip=1,decay=.01}={}) {
-    let ss=0;for(const b of this.blocks)for(const g of b.g)ss+=g*g;
-    const norm=Math.sqrt(ss),factor=Math.min(1,clip/(norm+1e-12));this.step++;this.lastLR=lr;
-    const c1=1-.9**this.step,c2=1-.999**this.step;
+    if(!Number.isFinite(lr)||lr<0||!Number.isFinite(clip)||clip<=0||!Number.isFinite(decay)||decay<0)throw Error('Invalid optimizer settings');
+    if(!Number.isSafeInteger(this.step)||this.step<0||!Number.isSafeInteger(this.step+1))numericalFailure('optimizer step');
+    let ss=0;for(const b of this.blocks)for(let i=0;i<b.w.length;i++){
+      for(const field of ['w','g','m','v'])if(!Number.isFinite(b[field][i]))numericalFailure(b.name+'.'+field+'['+i+']');
+      if(b.v[i]<0)numericalFailure(b.name+' negative Adam variance');ss+=b.g[i]*b.g[i];
+    }
+    const norm=finite(Math.sqrt(ss),'gradient norm'),factor=Math.min(1,clip/(norm+1e-12)),step=this.step+1;
+    const c1=1-.9**step,c2=1-.999**step;
+    // Validate the complete Float32 proposal before changing any optimizer or
+    // parameter state. Use the same moment rounding as the existing update.
+    for(const b of this.blocks)for(let i=0;i<b.w.length;i++){
+      const g=b.g[i]*factor,m=Math.fround(.9*b.m[i]+.1*g),v=Math.fround(.999*b.v[i]+.001*g*g);
+      if(!Number.isFinite(m)||!Number.isFinite(v))numericalFailure(b.name+' proposed Adam moments');
+      if(!Number.isFinite(Math.fround(b.w[i]-lr*((m/c1)/(Math.sqrt(v/c2)+1e-8)+decay*b.w[i]))))numericalFailure(b.name+' proposed parameter');
+    }
+    this.step=step;this.lastLR=lr;
     for(const b of this.blocks)for(let i=0;i<b.w.length;i++){const g=b.g[i]*factor;b.m[i]=.9*b.m[i]+.1*g;b.v[i]=.999*b.v[i]+.001*g*g;b.w[i]-=lr*((b.m[i]/c1)/(Math.sqrt(b.v[i]/c2)+1e-8)+decay*b.w[i]);}
     this.zero();return norm;
   }
   // Incremental autoregressive decoding: cache keys/values for the causal prefix.
   sample(random,end,maxLength) {
     const {dim:d,heads:h,vocab:v}=this.config,k=d/h,f=d*this.config.ffMultiplier;
+    if(!Number.isInteger(maxLength)||maxLength<1||maxLength>this.config.context)throw Error('Sampling length outside model context');
     const caches=this.layerBlocks.map(()=>({keys:[],values:[]})),tokens=[];let previous=v,logp=0;
     for(let t=0;t<maxLength;t++){
       let x=new Float32Array(d);for(let j=0;j<d;j++)x[j]=this.embedding.w[previous*d+j]+this.position.w[t*d+j];
@@ -127,9 +145,10 @@ export class Transformer {
       const x3=linear(u,B.down.w,1,f,d);for(let j=0;j<d;j++)x3[j]+=x2[j];
       x=x3;}
       const x3=x;
-      const c=rms(x3,this.norm3.w,1,d),p=linear(c.y,this.output.w,1,d,v);let max=-Infinity;for(let j=0;j<v;j++){p[j]+=this.bias.w[j];max=Math.max(max,p[j]);}let sum=0;for(let j=0;j<v;j++){p[j]=Math.exp(p[j]-max);sum+=p[j];}
+      const c=rms(x3,this.norm3.w,1,d),p=linear(c.y,this.output.w,1,d,v);let max=-Infinity;for(let j=0;j<v;j++){p[j]+=this.bias.w[j];finite(p[j],'sampling logits');max=Math.max(max,p[j]);}let sum=0;for(let j=0;j<v;j++){p[j]=Math.exp(p[j]-max);sum+=p[j];}
+      if(!Number.isFinite(sum)||sum<=0)numericalFailure('sampling probability normalization');
       let u0=random.next()*sum,chosen=v-1;for(let j=0;j<v;j++){u0-=p[j];if(u0<=0){chosen=j;break;}}
-      logp+=Math.log(p[chosen]/sum);tokens.push(chosen);previous=chosen;if(chosen===end)break;
+      logp+=finite(Math.log(p[chosen]/sum),'sampled token likelihood');tokens.push(chosen);previous=chosen;if(chosen===end)break;
     }
     return {tokens,logp};
   }
