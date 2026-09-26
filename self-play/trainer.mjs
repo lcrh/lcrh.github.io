@@ -1,7 +1,7 @@
 import {Random,ALPHABET,END,execute,mutate,textOf} from './machine.mjs';
 import {Transformer} from './model.mjs';
 
-export const DEFAULTS={seed:7,dim:24,context:64,programLength:48,pool:12,steps:4096,memory:256,lr:.0015,generatorLR:.0004,beta:.02,expert:1,bankSize:256,mode:'selfplay'};
+export const DEFAULTS={seed:7,heads:2,layers:1,ffMultiplier:2,dim:24,context:64,programLength:48,pool:12,steps:4096,memory:256,lr:.0015,generatorLR:.0004,beta:.02,expert:1,bankSize:256,mode:'selfplay'};
 export const PRESETS={quick:{...DEFAULTS},deep:{...DEFAULTS,dim:48,context:128,programLength:96,pool:24,steps:16384,bankSize:512,lr:.001,generatorLR:.0002}};
 const mean=a=>a.reduce((s,x)=>s+x,0)/a.length;
 export function generatorWeights(rows,beta,expert) {
@@ -19,8 +19,8 @@ export class Trainer {
   constructor(config={}, {retainHistory=false}={}) {
     this.config={...DEFAULTS,...config};const c=this.config;
     this.random=new Random(c.seed+1009);
-    this.learner=new Transformer({vocab:256,dim:c.dim,context:c.context,seed:c.seed});
-    this.generator=new Transformer({vocab:ALPHABET.length,dim:c.dim,context:c.programLength,seed:c.seed+17});
+    this.learner=new Transformer({vocab:256,dim:c.dim,heads:c.heads,layers:c.layers,ffMultiplier:c.ffMultiplier,context:c.context,seed:c.seed});
+    this.generator=new Transformer({vocab:ALPHABET.length,dim:c.dim,heads:c.heads,layers:c.layers,ffMultiplier:c.ffMultiplier,context:c.programLength,seed:c.seed+17});
     this.round=0;this.bank=[];this.archive=new Map();this.shadow=null;this.latest=null;this.totalEmitted=0;this.totalTokens=0;this.retainHistory=retainHistory;this.history=retainHistory?[this.learner.snapshot()]:null;
   }
   past() {
@@ -42,29 +42,46 @@ export class Trainer {
         const niches=[...this.archive.values()],niche=niches[this.random.int(niches.length)],parent=niche[this.random.int(niche.length)];
         sample={tokens:mutate(parent.tokens,this.random,c.programLength),logp:null};source='mutation';
       } else sample=c.mode==='prior'?this.prior():this.generator.sample(this.random,END,c.programLength);
-      const result=execute(sample.tokens,this.random,{length:c.context,steps:c.steps,memory:c.memory});
-      rows.push({tokens:sample.tokens,oldLogp:sample.logp,source,...result});
+      const inputState=this.random.state;
+      const limits={length:c.context,steps:c.steps,memory:c.memory};
+      const result=execute(sample.tokens,this.random,limits);
+      rows.push({tokens:sample.tokens,oldLogp:sample.logp,source,inputState,limits,round:this.round+1,...result});
     }
     return rows;
   }
   advance() {
-    const c=this.config,direction=c.mode==='prior'?null:this.learner.direction(this.past(),c.lr),rows=this.pool();
+    const direction=this.config.mode==='prior'?null:this.learner.direction(this.past(),this.config.lr),it=this.iteration(direction);let next=it.next();
+    while(!next.done){const op=next.value;let result;if(op.kind==='generator'){op.rows.forEach((r,i)=>op.model.backward(op.caches[i],op.weights[i].weight,false));}else{result=op.model.forward(op.targets);if(op.kind==='learner')op.model.backward(result);}next=it.next(result);}return next.value;
+  }
+  async advanceWith(backend){
+    let direction=null;
+    if(this.config.mode!=='prior'){
+      const target=Math.floor(this.round/2);if(!this.shadow)this.shadow=new Trainer(this.config);
+      while(this.shadow.round<target)await this.shadow.advanceWith(backend);
+      direction=this.learner.direction(this.shadow.learner.snapshot(),this.config.lr);
+    }
+    const it=this.iteration(direction);let next=it.next();while(!next.done)next=it.next(await backend.operation(next.value));return next.value;
+  }
+  *iteration(direction) {
+    const c=this.config,rows=this.pool();
     const gradient=this.learner.blocks.map(b=>new Float32Array(b.w.length));
     let emittedLoss=0,emittedCount=0,padLoss=0,padCount=0;
     for(const r of rows) {
-      this.learner.zero();const cache=this.learner.forward(r.output);this.learner.backward(cache);r.loss=cache.loss/Math.LN2;
+      this.learner.zero();const cache=yield {kind:"learner",model:this.learner,targets:r.output};r.loss=cache.loss/Math.LN2;
       r.reward=direction?this.learner.alignment(direction):0;
+      r.alignment=direction?this.learner.alignmentDetails(direction):null;
       if(c.mode==='difficulty')r.reward=cache.loss;
       for(let b=0;b<gradient.length;b++)for(let i=0;i<gradient[b].length;i++)gradient[b][i]+=this.learner.blocks[b].g[i]/rows.length;
       for(let t=0;t<c.context;t++)if(t<r.emitted){emittedLoss+=cache.tokenLoss[t]/Math.LN2;emittedCount++;}else{padLoss+=cache.tokenLoss[t]/Math.LN2;padCount++;}
       // Display forecasts are teacher-forced; the learner never sees program tokens.
       r.predictions=Array.from({length:c.context},(_,t)=>{let best=0;for(let b=1;b<256;b++)if(cache.p[t*256+b]>cache.p[t*256+best])best=b;return best;});
       r.surprise=Array.from(cache.tokenLoss).map(x=>x/Math.LN2);
+      r.correctProbability=r.surprise.map(x=>2**-x);
     }
     if(c.mode!=='prior') {
-      const caches=rows.map(r=>{const cache=this.generator.forward(r.tokens);r.logp=-cache.loss*r.tokens.length;return cache;});
+      const caches=[];for(const r of rows){const cache=yield {kind:"forward",model:this.generator,targets:r.tokens};r.logp=-cache.loss*r.tokens.length;let h=0;for(const p of cache.p)if(p>0)h-=p*Math.log2(p);r.generatorEntropy=h/r.tokens.length;caches.push(cache);}
       const weights=generatorWeights(rows,c.beta,c.expert);this.generator.zero();
-      rows.forEach((r,i)=>{r.policy=weights[i];this.generator.backward(caches[i],weights[i].weight,false);});
+      rows.forEach((r,i)=>{r.policy=weights[i];});yield {kind:"generator",model:this.generator,rows,weights,caches};
       this.generator.update(c.generatorLR);
     }
     this.learner.zero();gradient.forEach((g,i)=>this.learner.blocks[i].g.set(g));this.learner.update(c.lr);
@@ -83,7 +100,8 @@ export class Trainer {
     this.round++;this.totalTokens+=c.pool*c.context;this.totalEmitted+=emittedCount;
     if(this.retainHistory)this.history.push(this.learner.snapshot());
     const bytes=new Set(rows.flatMap(r=>Array.from(r.output.subarray(0,r.emitted))));
-    this.latest={round:this.round,loss:mean(rows.map(r=>r.loss)),emittedLoss:emittedCount?emittedLoss/emittedCount:null,padLoss:padCount?padLoss/padCount:null,emittedFraction:emittedCount/(c.pool*c.context),reward:mean(rows.map(r=>r.reward)),lookback:Math.floor((this.round-1)/2),uniqueBytes:bytes.size,niches:this.archive.size,totalTokens:this.totalTokens,totalEmitted:this.totalEmitted,rows:rows.map(r=>({...r,output:Array.from(r.output)}))};
+    const reward=mean(rows.map(r=>r.reward)),lengthMean=mean(rows.map(r=>r.tokens.length));
+    this.latest={round:this.round,loss:mean(rows.map(r=>r.loss)),emittedLoss:emittedCount?emittedLoss/emittedCount:null,padLoss:padCount?padLoss/padCount:null,emittedFraction:emittedCount/(c.pool*c.context),reward,rewardStd:Math.sqrt(mean(rows.map(r=>(r.reward-reward)**2))),rewardMin:Math.min(...rows.map(r=>r.reward)),rewardMax:Math.max(...rows.map(r=>r.reward)),lengthMean,lengthStd:Math.sqrt(mean(rows.map(r=>(r.tokens.length-lengthMean)**2))),generatorEntropy:c.mode==='prior'?Math.log2(ALPHABET.length):mean(rows.filter(r=>r.source==='fresh').map(r=>r.generatorEntropy)),lookback:Math.floor((this.round-1)/2),uniqueBytes:bytes.size,niches:this.archive.size,totalTokens:this.totalTokens,totalEmitted:this.totalEmitted,rows:rows.map(r=>({...r,output:Array.from(r.output)}))};
     return this.latest;
   }
   serialize() {return {version:1,config:this.config,random:this.random.state,round:this.round,learner:this.learner.serialize(),generator:this.generator.serialize(),bank:this.bank,archive:[...this.archive],totalTokens:this.totalTokens,totalEmitted:this.totalEmitted,shadow:this.shadow?.serialize()??null};}

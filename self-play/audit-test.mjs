@@ -38,3 +38,52 @@ for(let i=0;i<2;i++){
 }
 assert.equal(ws[2].pg,0);assert.equal(ws[2].ei,4/6);
 console.log('Independent objective arithmetic, identical control initialization, and evaluation isolation pass.');
+
+// Multi-layer checks are independent of the production GPU backend's gradients.
+const deep=new Transformer({vocab:19,dim:12,heads:4,layers:3,ffMultiplier:3,context:9,seed:812});
+const deepTargets=[2,4,6,8,10,12,14];
+deep.zero();deep.backward(deep.forward(deepTargets));
+let multiWorst=0,multiChecked=0;
+for(const block of deep.blocks)for(const index of [...new Set([0,Math.floor(block.w.length*.47),block.w.length-1])]){
+  const original=block.w[index],analytic=block.g[index],h=.002;
+  block.w[index]=original+h;const plus=deep.forward(deepTargets).loss;
+  block.w[index]=original-h;const minus=deep.forward(deepTargets).loss;block.w[index]=original;
+  const error=Math.abs(analytic-(plus-minus)/(2*h));multiWorst=Math.max(multiWorst,error);multiChecked++;
+  assert.ok(error<.0015,`Three-layer derivative ${block.name}[${index}]: ${error}`);
+}
+for(let seed=1;seed<=12;seed++){const s=deep.sample(new Random(seed),END,9);assert.ok(Math.abs(s.logp+deep.forward(s.tokens).loss*s.tokens.length)<3e-5);}
+const prefixA=deep.forward([1,3,5,7,9,11]),prefixB=deep.forward([1,3,5,4,8,12]);assert.deepEqual(prefixA.p.slice(0,4*19),prefixB.p.slice(0,4*19));
+console.log(`Independent three-layer/four-head checks: ${multiChecked} finite differences (worst ${multiWorst}), sampling likelihood, and causality pass.`);
+
+// Execute the same tensor/autodiff graph on TF's CPU test backend. This checks
+// graph mathematics and asynchronous orchestration, NOT actual GPU execution.
+// test-gpu.html is the separate browser/device execution check.
+const tfModule=await import('./vendor/tf-4.22.0.min.js'),tf=tfModule.default;
+await tf.setBackend('cpu');await tf.ready();
+const {GPUBackend}=await import('./gpu.mjs'),tensorGraph=new GPUBackend(tf);
+const tensorCountBefore=tf.memory().numTensors;
+const gModel=new Transformer({vocab:19,dim:8,heads:2,layers:2,ffMultiplier:3,context:8,seed:162});
+const gRows=[{tokens:[1,2,3,END]},{tokens:[7,7,END]},{tokens:[3,2,1,0,END]}],coefficients=[{weight:-.6},{weight:.35},{weight:.04}];
+gModel.zero();for(let i=0;i<gRows.length;i++)gModel.backward(gModel.forward(gRows[i].tokens),coefficients[i].weight,false);
+const expectedGenerator=gModel.blocks.map(b=>b.g.slice());gModel.zero();
+await tensorGraph.operation({kind:'generator',model:gModel,rows:gRows,weights:coefficients});
+let generatorWorst=0;for(let b=0;b<gModel.blocks.length;b++)for(let i=0;i<gModel.blocks[b].g.length;i++)generatorWorst=Math.max(generatorWorst,Math.abs(gModel.blocks[b].g[i]-expectedGenerator[b][i]));
+assert.ok(generatorWorst<1e-5,`Mixed-sign tensor generator gradient: ${generatorWorst}`);
+console.log(`Independent tensor-graph generator test: mixed positive/negative sequence weights match reverse gradients (worst ${generatorWorst}); CPU test executor.`);
+
+const asyncConfig={seed:418,dim:4,heads:2,layers:2,ffMultiplier:2,context:6,programLength:6,pool:4,steps:32};
+const asyncShadow=new Trainer(asyncConfig),asyncRetained=new Trainer(asyncConfig,{retainHistory:true});
+async function retainedAdvance(trainer){
+  const historical=trainer.history[Math.floor(trainer.round/2)];
+  const it=trainer.iteration(trainer.learner.direction(historical,trainer.config.lr));
+  let next=it.next();while(!next.done)next=it.next(await tensorGraph.operation(next.value));return next.value;
+}
+for(let e=0;e<12;e++){
+  const x=await asyncShadow.advanceWith(tensorGraph),y=await retainedAdvance(asyncRetained);assert.deepEqual(x,y);
+  for(const key of ['learner','generator'])assert.deepEqual(asyncShadow[key].serialize(),asyncRetained[key].serialize());
+  assert.equal(asyncShadow.random.state,asyncRetained.random.state);assert.deepEqual(asyncShadow.bank,asyncRetained.bank);
+}
+const asyncRestored=Trainer.restore(JSON.parse(JSON.stringify(asyncShadow.serialize())));
+assert.deepEqual(await asyncRestored.advanceWith(tensorGraph),await asyncShadow.advanceWith(tensorGraph));
+assert.equal(tf.memory().numTensors,tensorCountBefore,'Tensor graph leaks retained tensors');
+console.log('Independent asynchronous graph check: 12 rounds match retained halfway snapshots exactly; complete model/optimizer/RNG/bank equality, checkpoint continuation, and tensor disposal pass (CPU test executor).');

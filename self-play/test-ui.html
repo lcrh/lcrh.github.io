@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8"><title>Playground interaction verification</title><style>body{font:14px monospace}iframe{width:1100px;height:750px;border:1px solid #999}</style><pre id="result">Running interface checks…</pre><iframe src="./"></iframe><script type="module">
+import {ENTRYPOINTS} from './entrypoints.mjs';
+const frame=document.querySelector('iframe'),out=document.querySelector('#result'),log=s=>out.textContent+='\n'+s;
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+async function until(fn,label){for(let i=0;i<200;i++){if(fn())return;await wait(100);}throw Error('Timed out: '+label);}
+function assert(x,label){if(!x)throw Error(label);}
+try{await until(()=>frame.contentDocument?.querySelector('#run')&&!frame.contentDocument.querySelector('#run').disabled,'models ready');const d=frame.contentDocument,w=frame.contentWindow,$=s=>d.querySelector(s);
+assert($('#model-info').textContent.includes('WebGPU'),'WebGPU backend displayed');for(const e of ENTRYPOINTS)assert($(e.selector),'Entry selector missing '+e.selector);log('PASS all static entrypoints mounted');
+$('#run').click();await until(()=>/\d+ training rounds/.test($('#clock').textContent)&&parseInt($('#clock').textContent)>=3,'training rounds');$('#run').click();await until(()=>$('#run').textContent==='Resume training','paused');
+const rewards=[...d.querySelectorAll('.program-row .reward')].map(x=>Number(x.textContent));assert(rewards.every((x,i)=>i===0||x<=rewards[i-1]),'Reward order');log('PASS genuine GPU rounds and reward sorting');
+$('#selected-reward').click();await until(()=>$('.concept-tooltip .live-diagnostic'),'row diagnostic');const root=$('.concept-tooltip'),frozen=root.querySelector('.live-diagnostic').textContent;
+for(const topic of ['preconditioner','adam','gradients','directional-derivative','gradient-reward']){const cards=d.querySelectorAll('.concept-tooltip'),last=cards[cards.length-1],a=last.querySelector(`[data-concept="${topic}"]`);assert(a,'Nested link '+topic);a.click();}
+assert(d.querySelectorAll('.concept-tooltip').length===6,'Six explanation levels');await until(()=>d.querySelectorAll('mjx-container').length>0,'math rendering');assert(!d.querySelector('mjx-merror'),'MathJax error');log('PASS six nested pinned levels, mathematical rendering');
+$('#run').click();await wait(1600);$('#run').click();await until(()=>$('#run').textContent==='Resume training','paused again');assert(root.querySelector('.live-diagnostic').textContent===frozen,'Captured diagnostics changed');log('PASS nested data remains frozen while training advances');
+for(let i=0;i<6;i++)d.dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert(!$('.concept-tooltip'),'Escape closes layers');
+$('#extra-diagnostics').open=true;await wait(150);assert($('#reward-chart')._plotData.unit.includes('reward'),'Reward plot');assert($('#emission-chart')._plotData.unit.includes('%'),'Output percentage axis');assert($('#probe-chart')._plotData.unit.includes('bits'),'Probe axis');log('PASS graph quantities and units');
+$('#eval-input').value='abcabcabc';$('#evaluate-custom').click();await until(()=>$('#eval-result').textContent.includes('9 bytes'),'text evaluation');$('#eval-format').value='bytes';$('#eval-input').value='0x41, 66, 67';$('#evaluate-custom').click();await until(()=>$('#eval-result').textContent.includes('3 bytes'),'byte evaluation');log('PASS custom UTF-8 and byte evaluation');
+$('#sandbox-code').value='+.+.F';$('#execute').click();await until(()=>$('#selected-code').textContent==='+.+.F','sandbox result');$('#execution details').open=true;for(let i=0;i<4;i++)$('#execution [data-action="step"]').click();assert($('#execution .sim-output').textContent.includes('1 2'),'Stepped output');assert($('#execution .sim-output').textContent.includes('matches'),'Replay match');log('PASS sandbox result and exact instruction stepping');
+$('#open-map').click();assert($('.wiki-content').textContent.includes('Concept map'),'Concept map');d.querySelector('[data-view="entrypoints"]').click();assert(d.querySelectorAll('.wiki-content tbody tr').length>=59,'Entrypoint table');log('PASS wiki map, interface map and reading paths');
+log('ALL INTERFACE CHECKS PASSED');}catch(e){log('FAIL '+e.stack);}
+</script>

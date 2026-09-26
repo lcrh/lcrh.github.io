@@ -127,3 +127,12 @@ behavior; those are separate operational checks.
 [Self-Play Pretraining with Zero Data, §2 and Appendices E–G](https://arxiv.org/html/2609.30063v1).
 The checklist above is an assessment of this implementation against that source;
 it is not an endorsement of the paper's empirical conclusions.
+
+
+## Extension audit: companion, configurable transformers and WebGPU
+
+The independent reviewer checked all companion articles against the paper and source. Corrections clarified the optimal expected noise loss (8 bits/byte, with biased predictions potentially worse), Adam startup behavior, probe composition, archive depth and entropy averaging. All source anchors and conceptual links were verified. The core historical reward, policy-gradient, KL, replay, mutation and expert-iteration explanations were found faithful.
+
+The reviewer then checked actual multilayer and GPU tensor code. Added independent tests cover 87 finite differences in a three-layer/four-head model, causality, cached sampling, mixed-sign generator gradients, 12 asynchronous rounds compared with retained historical snapshots, complete optimizer/RNG/bank equality, checkpoint continuation and tensor disposal. These independent tensor-graph tests run on TensorFlow’s CPU test executor; the separate browser `test-gpu.html` supplies actual GPU-device evidence.
+
+The audit identified one failure-state issue: an interrupted GPU round could advance randomness before an error and then be resumed. This has been fixed by marking partial training failures fatal, preventing continuation/export, and requiring a fresh run or completed checkpoint. Restore also rejects mismatched main/control round counts. GPU reproducibility claims are scoped to the same device/backend/runtime, not arbitrary devices.

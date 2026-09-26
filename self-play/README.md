@@ -6,8 +6,8 @@
 Two randomly initialized, trainable causal transformers run entirely in a browser
 worker. A generator writes executable programs, a learner predicts their byte
 outputs, and an actual gradient-based reward changes the generator's curriculum.
-There are no downloaded weights, model services, external dependencies, or
-prewritten training programs. The example in the editable sandbox is evaluation
+There are no downloaded weights, model services, or prewritten training programs.
+TensorFlow.js (4.22.0) and MathJax (3.2.2) are bundled locally with their licenses. The example in the editable sandbox is evaluation
 only. The page never loads the verification results below.
 
 Press **Start from zero**. The first seconds mostly teach the learner padding.
@@ -28,10 +28,16 @@ step:
 | `model.mjs` | Causal transformer, explicit backpropagation through all weights, AdamW, cached sampling |
 | `trainer.mjs` | Program pool, actual gradient reward, policy gradients, expert iteration, archives, evaluation |
 | `worker.mjs` | Background training, matched-token control, save/restore, isolated sandbox |
+| `gpu.mjs` | WebGPU transformer forward passes and full autodiff gradients |
+| `config.mjs` | Validated presets and actual model/training configuration |
+| `knowledge-data.mjs`, `knowledge.mjs`, `entrypoints.mjs` | Shared nested explanations, wiki and connected maps |
+| `diagnostics.mjs`, `simulator.mjs` | Captured numerical diagnostics and exact stepped execution |
 | `app.mjs` | Live data display, plots, controls, local persistence |
 
-Each transformer has one pre-normalized layer, two attention heads, an MLP of
-twice its width, RMS normalization, learned positions and a ReLU activation. These
+The presets use one pre-normalized layer, two attention heads and an MLP of
+twice the model width. The settings foldout configures 1–3 layers, width 8–96,
+1–8 heads (width must be divisible), MLP ratio 1–4, context and training budgets.
+All configurations use RMS normalization, learned positions and ReLU activations. These
 are small ordinary attention networks, not Llama replicas. Generator embeddings
 and output head use 19 instruction tokens; the learner's output head uses all
 256 bytes. Each has an additional learned beginning-of-sequence embedding.
@@ -108,9 +114,21 @@ vectors against this construction. Floating-point differences across JavaScript
 engines can eventually change sampled trajectories, so bit-exact continuation
 is guaranteed by the tests within the same runtime, not across all browsers.
 
+### WebGPU execution
+
+WebGPU is the default, with an explicit CPU compatibility option in Model & training settings. Forward passes and all learner/generator training gradients execute on the GPU; interpreter execution, cached token sampling, reward reductions, Adam updates and evaluation use the CPU. TensorFlow.js CPU forwarding is disabled for GPU tensor operations. The page reports its actual backend and does not silently fall back.
+
+The full historical trainer hierarchy uses the same backend. GPU results differ slightly from CPU floating-point reductions and can diverge in sampled trajectories over time. Same-device/runtime checks reproduce historical weights and checkpoints exactly; cross-device bit identity is not promised. Checkpoints remember their backend. A failed operation inside a round blocks continuation/export until a new run or completed checkpoint is restored.
+
+### Paper companion and interaction map
+
+[Open the companion](https://lcrh.github.io/self-play/wiki.html). The 88 articles cover the method, equations, experiments, scaling argument and appendices, with linked source sections. All are reachable within three links of an interface entrypoint. [KNOWLEDGE-MAP.md](KNOWLEDGE-MAP.md) separately records the UI entrypoints and article graph; the interactive companion includes both maps, search, prerequisites, related concepts and backlinks.
+
+Hover for a preview, click **Keep open**, and follow links inside to any depth. Nested panels retain the original program/graph-point data while training advances. Escape closes one level. Interactive equations use self-hosted MathJax. The inspector execution viewer uses the training interpreter and captured input RNG state: step/play/reset shows source and expanded instruction pointers, memory and emitted output.
+
 ## Reading the displays
 
-- The curriculum contains the **current actual batch**, in pool order. The
+- The curriculum contains the **current actual batch**, sorted by descending reward by default (sampling order is selectable). The
   inspector follows its highest-reward row until you select one. This selection
   only controls the display. In the larger preset the row tape previews the first
   64 of 128 output bytes; the inspector plots the full output.
@@ -125,6 +143,8 @@ is guaranteed by the tests within the same runtime, not across all browsers.
   at initialization, round 1, and every 20 rounds. Repetition, cycles, counting and
   random noise each use four sequences; text uses one short English passage.
   These are deliberately small demonstrations, not the paper's benchmarks.
+- Custom evaluation accepts UTF-8 text or decimal/hex bytes. It scores without training, padding or archive insertion. Long sequences are split into nonoverlapping context-sized chunks, with boundaries explained in the result.
+- Optional graphs show actual reward mean ± population standard deviation, output percentage, program-length mean ± standard deviation, and generator entropy. Hovered plot points use retained data rather than the latest batch.
 - The first/last-16-byte comparison is descriptive: context, position and target
   content all differ. It is not a controlled test of in-context learning.
 - Forecasts are greedy next-byte predictions conditioned on the true preceding
@@ -160,6 +180,7 @@ From the repository root, on Node 24:
 node self-play/test.mjs
 node self-play/audit-test.mjs
 node self-play/test-worker.mjs
+node self-play/test-companion.mjs
 node self-play/benchmark.mjs 2000 7
 node self-play/benchmark.mjs 1500 7 prior
 node self-play/benchmark.mjs 1000 23
@@ -172,7 +193,7 @@ checkpoint continuation, and the browser worker's message protocol. A separate
 agent reviewed both the source paper and actual implementation. Its report and
 additional tests are included in [AUDIT.md](AUDIT.md).
 
-Local verification on 2026-09-26 produced the following held-out **bits per byte**.
+The original **CPU backend** verification on 2026-09-26 produced the following held-out **bits per byte**.
 Each number is measured from real model probabilities. Full logs with emitted
 program examples are in [verification-results.json](verification-results.json).
 
@@ -196,3 +217,9 @@ counting improved in one seed while cycles did not; text performance could worse
 substantially; another seed had not learned counting by round 1,000. This is a
 faithful miniature experiment, not evidence that leaving it running will reproduce
 the paper's broader scaling, multimodal transfer, or mathematical discoveries.
+
+## GPU and companion verification (2026-09-26)
+
+Open `test-gpu.html` on a local server for actual WebGPU checks. Learner gradient comparisons (including two layers and 256 outputs) differed from the manual reference by at most 5.96e-8; mixed-sign generator gradients by at most 3.58e-7. Ten real GPU rounds matched a retained-history reference exactly. Same-device checkpoint continuation matched and zero tensors remained allocated. A default browser run completed 467 rounds with its prior control in 72 seconds of measured training time; this is a throughput observation, not a transfer claim.
+
+`test-ui.html` exercises the actual page: GPU startup, sorted rows, nested mathematical explanations, frozen diagnostics, custom evaluation, stepped sandbox execution, and both maps. `test-companion.mjs` checks graph reachability, parameter counts, exact interpreter replay, reward decomposition, statistics and checkpoint continuation. Original preset CPU training weights, RNG and banks remain bit-identical after instrumentation.

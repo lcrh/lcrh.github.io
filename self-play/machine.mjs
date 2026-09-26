@@ -9,17 +9,19 @@ export class Random {
 }
 export function textOf(tokens) {return Array.from(tokens,x=>ALPHABET[x]).join('');}
 export function tokensOf(text) {return Array.from(text).filter(x=>ALPHABET.includes(x)).map(x=>ALPHABET.indexOf(x));}
-export function execute(tokens, random, {length=64, steps=4096, memory=256}={}) {
+export function createMachine(tokens, random, {length=64, steps=4096, memory=256}={}) {
   const raw = typeof tokens==='string'? tokens : textOf(tokens);
   const body=raw.split('F')[0];
-  const code=Array.from(body,x=>MACROS[x]??x).join('');
+  const origins=[];const code=Array.from(body,(x,i)=>{const expanded=MACROS[x]??x;for(let j=0;j<expanded.length;j++)origins.push(i);return expanded;}).join('');
   const jumps=new Int32Array(code.length).fill(-1),stack=[];
   for(let i=0;i<code.length;i++) {if(code[i]==='[')stack.push(i);else if(code[i]===']'&&stack.length){const j=stack.pop();jumps[i]=j;jumps[j]=i;}}
   const tape=new Uint8Array(memory),output=new Uint8Array(length);
   let pointer=0,pc=0,used=0,emitted=0,depth=0,maxDepth=0;
   // Count dynamically active matched loops, including loops in macro expansions.
   const active=new Set();
-  while(pc<code.length&&used<steps&&emitted<length) {
+  function done(){return pc>=code.length||used>=steps||emitted>=length;}
+  function step() {
+    if(done())return false;
     const op=code[pc];used++;
     switch(op) {
       case '>':pointer=(pointer+1)%memory;break;
@@ -32,9 +34,12 @@ export function execute(tokens, random, {length=64, steps=4096, memory=256}={}) 
       case ']':if(jumps[pc]>=0){if(tape[pointer]!==0)pc=jumps[pc];else if(active.delete(jumps[pc]))depth--;}break;
     }
     pc++;
+    return true;
   }
-  return {output,emitted,steps:used,depth:maxDepth,reason:emitted===length?'output limit':used===steps?'step limit':'halted',bodyLength:body.length};
+  function result(){return {output,emitted,steps:used,depth:maxDepth,reason:emitted===length?'output limit':used===steps?'step limit':'halted',bodyLength:body.length};}
+  return {step,done,run(n=Infinity){let count=0;while(count<n&&step())count++;return result();},result,snapshot(){return {...result(),code,body,origins,tape,pointer,pc,done:done(),stepBudget:steps,outputLimit:length};}};
 }
+export function execute(tokens,random,limits){return createMachine(tokens,random,limits).run();}
 export function mutate(tokens,random,maxLength) {
   let a=Array.from(tokens);if(a.at(-1)===END)a.pop();
   const kind=random.int(3),i=random.int(a.length+1);
